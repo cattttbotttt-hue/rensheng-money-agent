@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from . import config
+from . import assist, config
 from .util import log
 
 STAGE = "秋"
@@ -40,7 +40,7 @@ def write_daily_note(raw_payload: dict, scored_payload: dict) -> str:
     lines: list[str] = [
         f"# Money Opportunities — {day}",
         "",
-        "> 🤖 money-bot 日報 · 春偵察 → 夏評選 → 秋行動 · 人工批准制，bot 絕不代送表單、不付款、不繞 captcha、不做 KYC、不索取 seed phrase",
+        "> 🤖 money-bot 日報 · 春偵察 → 夏評選 → 秋行動 · 人工批准制，AI 只提供建議，bot 絕不代送表單、不付款、不繞 captcha、不做 KYC、不索取 seed phrase",
         "",
         "## 🌱 春・偵察 Scout",
         "",
@@ -63,6 +63,9 @@ def write_daily_note(raw_payload: dict, scored_payload: dict) -> str:
     ]
     for rank, item in enumerate(items[:3], 1):
         lines.append(f"{rank}. **{item.get('score', 0):.0f}** 分 {_tag(item)} · {_prize(item)} · [{item['title']}]({item['url']})")
+        ai_line = assist.format_line(item.get("ai"), limit=280)
+        if ai_line:
+            lines.append(f"   - {ai_line}")
     if dropped:
         lines += ["", "<details><summary>過濾明細 dropped items</summary>", ""]
         lines += [f"- ~~{d['title'][:80]}~~ — {d['drop_reason']}" for d in dropped]
@@ -76,8 +79,11 @@ def write_daily_note(raw_payload: dict, scored_payload: dict) -> str:
             f"- 💰 {_prize(item)} · 費力 {item.get('effort', '?')} · 風險 {item.get('risk', '?')} · ⏰ 截止 {item.get('deadline') or '未知'}",
             f"- 類別 {item['category']} · 來源 {item['source']} · 🆔 `{item['id']}`",
             "- 📝 " + "; ".join(item.get("reasons", [])),
-            "",
         ]
+        ai_line = assist.format_line(item.get("ai"), limit=320)
+        if ai_line:
+            lines.append(f"- {ai_line}")
+        lines.append("")
 
     if len(items) > TOP_DETAILED:
         lines += [

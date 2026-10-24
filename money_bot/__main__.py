@@ -6,6 +6,7 @@
   python -m money_bot digest [--all]      秋 send digest (--all resends seen items)
   python -m money_bot poll                秋 poll Telegram approvals
   python -m money_bot approve <id>        秋 approve an item locally (no Telegram)
+  python -m money_bot advise <id>         秋 print AI advice only (no approve, no invoice)
   python -m money_bot paypal-dry-run [id] 秋 print the PayPal invoice body; no network
   python -m money_bot trio-test           春/夏/秋 send one check-in line each
   python -m money_bot enter <id>          秋 semi-auto pre-fill for an APPROVED item
@@ -33,6 +34,8 @@ def main() -> None:
     sub.add_parser("trio-test")
     p_approve = sub.add_parser("approve")
     p_approve.add_argument("item_id")
+    p_advise = sub.add_parser("advise")
+    p_advise.add_argument("item_id")
     p_paypal = sub.add_parser("paypal-dry-run")
     p_paypal.add_argument("item_id", nargs="?", default="")
     p_enter = sub.add_parser("enter")
@@ -69,6 +72,11 @@ def main() -> None:
         from . import executor
 
         executor.approve(args.item_id)
+    elif args.cmd == "advise":
+        from . import executor
+
+        if executor.advise_item(args.item_id) is None:
+            raise SystemExit(1)
     elif args.cmd == "paypal-dry-run":
         import json
 

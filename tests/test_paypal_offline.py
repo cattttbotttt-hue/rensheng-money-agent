@@ -25,6 +25,10 @@ PAYPAL_KEYS = (
     "PAYPAL_INVOICER_EMAIL",
     "PAYPAL_PLACEHOLDER_AMOUNT",
     "MONEY_BOT_PUBLISH",
+    # Approve now asks for advice. Keep that path offline in this file.
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "OPENAI_MODEL",
 )
 PATH_ATTRS = (
     "DATA_DIR",

@@ -1,10 +1,12 @@
 """秋 executor+ledger — daily digest, approval polling, participation packs.
 
 Approval-gated drafts only: the bot sends a digest with Approve buttons and
-prepares a participation pack when a human approves. After that approval it
-may create one PayPal Sandbox invoice. It never pays that invoice, never
-auto-submits registrations, never bypasses captchas, never performs KYC
-steps, and never requests seed phrases.
+prepares a participation pack when a human approves. Before that pack is
+written, and when digest highlights are built, an AI assist line summarizes
+risk and effort. The line is advice only: it never approves, skips, or pays.
+After a human approval the bot may create one PayPal Sandbox invoice. It
+never pays that invoice, never auto-submits registrations, never bypasses
+captchas, never performs KYC steps, and never requests seed phrases.
 """
 
 from __future__ import annotations
@@ -12,7 +14,7 @@ from __future__ import annotations
 import html
 import json
 
-from . import config, ledger, paypal, publish, vault
+from . import assist, config, ledger, paypal, publish, vault
 from .telegram import TelegramTrio
 from .util import log, utc_now_iso
 
@@ -109,6 +111,7 @@ def format_item(item: dict, rank: int) -> str:
         f"🔗 {item['url']}\n"
         f"📝 {reasons}\n"
         f"🆔 {item['id']}"
+        + _ai_suffix(item)
     )
 
 
@@ -122,9 +125,44 @@ def format_slim_telegram(top: list[dict], kept: int, note_relpath: str) -> str:
         prize = f"~${item['prize_usd']:,.0f}" if item.get("prize_usd") else "價值未知"
         tag = DATA_EFFORT_TAGS.get(item.get("data_effort", "email_only"), "")
         lines.append(f"{rank}. {item.get('score', 0):.0f}分 {tag} {prize} {item['title'][:42]}")
+        ai_line = assist.format_line(item.get("ai"), limit=90)
+        if ai_line:
+            lines.append(f"   {ai_line}")
     lines.append(f"📓 完整摘要見 notes/ full digest: {note_relpath}")
+    lines.append("🤖 AI 只提供建議，不會自動批准或付款。")
     lines.append("💳 Approve 只寫參與包。已設定 PayPal sandbox 時會另開一張發票，bot 不會付款。")
     return "\n".join(lines)
+
+
+def _ai_suffix(item: dict) -> str:
+    line = assist.format_line(item.get("ai") if isinstance(item, dict) else None)
+    if not line:
+        return ""
+    return f"\n{line}"
+
+
+def _annotate_highlights(*groups: list[dict], limit: int = 3) -> None:
+    """Attach advice to highlight rows. A skip recommendation changes nothing."""
+    seen: set[str] = set()
+    for group in groups:
+        for item in group[:limit]:
+            item_id = str(item.get("id") or "")
+            if not item_id or item_id in seen or item.get("ai"):
+                if item_id:
+                    seen.add(item_id)
+                continue
+            seen.add(item_id)
+            advice = assist.attach(item)
+            if advice.get("skipped"):
+                via = "AI provider skipped"
+            elif advice.get("fallback"):
+                via = "AI call failed"
+            else:
+                via = advice.get("model") or advice.get("provider") or "AI"
+            log(
+                STAGE,
+                f"AI 建議 {item_id} → {advice.get('recommendation')} ({via})，僅供參考，不會自動批准或付款",
+            )
 
 
 def _approve_keyboard(top: list[dict]) -> dict:
@@ -149,10 +187,12 @@ def digest(top_n: int = config.DIGEST_TOP_N, include_seen: bool = False) -> list
         log(STAGE, "無新項目可摘要 no new items to digest")
         return []
 
+    _annotate_highlights(items, top, limit=3)
     note_relpath = vault.write_daily_note(raw_payload, scored_payload)
     header = (
         f"🍂 秋・每日精選 Daily digest — {utc_now_iso()[:10]}\n"
         f"{len(top)} 則新機會（評分: 低費力優先 effort-first）\n"
+        "AI 建議只供參考，不會自動批准或付款。\n"
         "按 ✅ Approve 產生人工參與包。若已設定 PayPal sandbox，批准後會開一張發票（不會付款）。"
     )
     slim = format_slim_telegram(top, scored_payload.get("count", 0), note_relpath)
@@ -211,6 +251,26 @@ def _remember_paypal(state: dict, item_id: str, result: dict) -> None:
     ledger.save_state(state)
 
 
+def _find_item(item_id: str, state: dict | None = None) -> dict | None:
+    state = state if state is not None else ledger.load_state()
+    item = state.get("items_cache", {}).get(item_id)
+    if item:
+        return item
+    return next((row for row in _load_scored() if row.get("id") == item_id), None)
+
+
+def advise_item(item_id: str) -> dict | None:
+    """Print advice for one scored item. Does not approve or create an invoice."""
+    item = _find_item(item_id)
+    if not item:
+        log(STAGE, f"找不到項目 item not found: {item_id}")
+        return None
+    advice = assist.advise(item)
+    print(assist.format_block(advice))
+    print("Advice only. This did not approve the item and did not create or pay a PayPal invoice.")
+    return advice
+
+
 def approve(item_id: str, by: str = "local-cli", tg: TelegramTrio | None = None) -> dict | None:
     state = ledger.load_state()
     prior = state["approvals"].get(item_id) or {}
@@ -219,20 +279,29 @@ def approve(item_id: str, by: str = "local-cli", tg: TelegramTrio | None = None)
     if already and prior_paypal.get("invoice_id"):
         log(STAGE, f"{item_id} 已批准過 already approved, skip")
         return None
-    item = state["items_cache"].get(item_id)
-    if not item:
-        item = next((i for i in _load_scored() if i["id"] == item_id), None)
+    item = _find_item(item_id, state)
     if not item:
         log(STAGE, f"找不到項目 item not found: {item_id}")
         return None
 
+    advice = prior.get("ai") if already else None
     if not already:
-        state["approvals"][item_id] = {"status": "approved", "ts": utc_now_iso(), "by": by}
-        pack_path = ledger.write_pack(item, approved_by=by)
+        # Advice is recorded for the human. A "skip" recommendation does not
+        # cancel this approval and does not create or pay an invoice.
+        advice = assist.public_fields(assist.advise(item))
+        state["approvals"][item_id] = {
+            "status": "approved",
+            "ts": utc_now_iso(),
+            "by": by,
+            "ai": advice,
+        }
+        pack_path = ledger.write_pack(item, approved_by=by, advice=advice)
         ledger.save_state(state)
         ledger.append_ledger("item_approved", item_id=item_id, title=item["title"], by=by)
         ledger.append_ledger("pack_created", item_id=item_id, path=pack_path)
+        ledger.record_advice(item_id, advice)
         log(STAGE, f"已產生參與包 pack → {pack_path}（人工執行 manual steps only）")
+        log(STAGE, assist.format_line(advice))
     else:
         pack_path = f"notes/packs/{item_id}.md"
         log(STAGE, f"{item_id} 已批准，補開 PayPal 發票 retry invoice")
@@ -252,15 +321,19 @@ def approve(item_id: str, by: str = "local-cli", tg: TelegramTrio | None = None)
     notice = _paypal_notice(paypal_result)
     log(STAGE, notice.replace("\n", " | "))
     if tg and tg.enabled:
-        tg.send(
-            "autumn",
-            html.escape(
-                f"✅ 已批准 approved: {item['title'][:80]}\n"
-                f"📓 參與包 pack: {pack_path}\n"
-                f"{notice}\n"
-                "請人工完成步驟；bot 不會代送任何表單、不會填卡號、也不會支付這張發票。"
-            ),
+        ai_line = assist.format_line(advice, limit=180)
+        body = (
+            f"✅ 已批准 approved: {item['title'][:80]}\n"
+            f"📓 參與包 pack: {pack_path}\n"
         )
+        if ai_line:
+            body += f"{ai_line}\n"
+        body += (
+            f"{notice}\n"
+            "請人工完成步驟；bot 不會代送任何表單、不會填卡號、也不會支付這張發票。\n"
+            "AI 建議僅供參考，不會自動批准或付款。"
+        )
+        tg.send("autumn", html.escape(body))
     publish.publish()
     return item
 
