@@ -6,6 +6,7 @@
   python -m money_bot digest [--all]      秋 send digest (--all resends seen items)
   python -m money_bot poll                秋 poll Telegram approvals
   python -m money_bot approve <id>        秋 approve an item locally (no Telegram)
+  python -m money_bot paypal-dry-run [id] 秋 print the PayPal invoice body; no network
   python -m money_bot trio-test           春/夏/秋 send one check-in line each
   python -m money_bot enter <id>          秋 semi-auto pre-fill for an APPROVED item
   python -m money_bot verify <id>         秋 check Gmail for a verification link
@@ -32,6 +33,8 @@ def main() -> None:
     sub.add_parser("trio-test")
     p_approve = sub.add_parser("approve")
     p_approve.add_argument("item_id")
+    p_paypal = sub.add_parser("paypal-dry-run")
+    p_paypal.add_argument("item_id", nargs="?", default="")
     p_enter = sub.add_parser("enter")
     p_enter.add_argument("item_id")
     p_verify = sub.add_parser("verify")
@@ -66,6 +69,21 @@ def main() -> None:
         from . import executor
 
         executor.approve(args.item_id)
+    elif args.cmd == "paypal-dry-run":
+        import json
+
+        from . import ledger, paypal
+
+        item = None
+        if args.item_id:
+            state = ledger.load_state()
+            item = state["items_cache"].get(args.item_id)
+            if not item and config.SCORED_PATH.exists():
+                scored = json.loads(config.SCORED_PATH.read_text(encoding="utf-8")).get("items", [])
+                item = next((row for row in scored if row.get("id") == args.item_id), None)
+            if not item:
+                raise SystemExit(f"item not found: {args.item_id}")
+        print(json.dumps(paypal.dry_run(item), ensure_ascii=False, indent=2))
     elif args.cmd == "enter":
         from . import enter
 

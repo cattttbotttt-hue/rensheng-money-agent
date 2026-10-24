@@ -2,12 +2,15 @@
 
 HARD RULES enforced here and in executor.py:
   * never auto-submit real registrations or payments — drafts/packs only
+  * a PayPal invoice may be created after approval; it is never paid here
   * no captcha bypass, no KYC steps, never request seed phrases/private keys
 """
 
 from __future__ import annotations
 
+import copy
 import json
+import re
 
 from . import config
 from .util import log, utc_now_iso
@@ -15,11 +18,14 @@ from .util import log, utc_now_iso
 STAGE = "秋"
 
 SAFETY_BANNER = (
-    "> ⚠️ **人工操作 only / manual steps only.** This pack is a draft checklist — "
-    "nothing has been submitted on your behalf. Never share a seed phrase, "
-    "recovery phrase, or private key; anyone asking is a scam. No captcha bypass, "
-    "no KYC steps are performed by this bot."
+    "> ⚠️ **人工操作 only / manual steps only.** This pack is a draft checklist. "
+    "The bot does not submit the opportunity form, pay, or enter card details. "
+    "After you approve, it may create one PayPal invoice and will not pay it. "
+    "Never share a seed phrase, recovery phrase, or private key; anyone asking "
+    "is a scam. No captcha bypass, no KYC steps are performed by this bot."
 )
+
+_PAYPAL_HEADING = "## PayPal Sandbox invoice"
 
 CHECKLISTS = {
     "crypto-airdrop": [
@@ -72,10 +78,14 @@ DEFAULT_STATE: dict = {
 
 
 def load_state() -> dict:
+    # Deep copy: DEFAULT_STATE holds nested dicts, and a shallow copy would
+    # let one approval mutate the template seen by the next load.
     if config.STATE_PATH.exists():
         state = json.loads(config.STATE_PATH.read_text(encoding="utf-8"))
-        return {**DEFAULT_STATE, **state}
-    return dict(DEFAULT_STATE)
+        merged = copy.deepcopy(DEFAULT_STATE)
+        merged.update(state)
+        return merged
+    return copy.deepcopy(DEFAULT_STATE)
 
 
 def save_state(state: dict) -> None:
@@ -91,6 +101,95 @@ def append_ledger(event: str, **fields) -> None:
     with config.LEDGER_PATH.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(record, ensure_ascii=False) + "\n")
     log(STAGE, f"ledger += {event} {fields.get('item_id', '')}")
+
+
+def _paypal_markdown(result: dict) -> str:
+    lines = [_PAYPAL_HEADING, ""]
+    if result.get("skipped"):
+        lines.append(f"- {result.get('reason', 'PayPal skipped. No invoice was created.')}")
+        lines.append("- The checklist above is unchanged.")
+    elif result.get("error") and not result.get("invoice_id"):
+        lines.append(f"- Failed: {result.get('error')}")
+        lines.append("- No invoice id was recorded. Approval still stands. The bot did not pay anything.")
+    else:
+        source = result.get("amount_source")
+        if source == "placeholder":
+            source_text = "sandbox placeholder (no prize was parsed; default 1.00 USD unless PAYPAL_PLACEHOLDER_AMOUNT is set)"
+        else:
+            source_text = "parsed prize"
+        lines.extend(
+            [
+                f"- Invoice id: `{result.get('invoice_id')}`",
+                f"- Status: `{result.get('status')}`",
+                f"- Amount: `{result.get('amount')} {result.get('currency', 'USD')}` ({source_text})",
+                f"- Link: {result.get('link')}",
+            ]
+        )
+        if result.get("merchant_link") and result.get("merchant_link") != result.get("link"):
+            lines.append(f"- Merchant link: {result.get('merchant_link')}")
+        lines.append(f"- Mode: `{result.get('mode', 'sandbox')}`")
+        if result.get("send_note"):
+            lines.append(f"- Send note: {result.get('send_note')}")
+        lines.append("- The bot created this invoice and did not pay it.")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _upsert_paypal_section(item_id: str, result: dict) -> None:
+    path = config.VAULT_PACKS_DIR / f"{item_id}.md"
+    if not path.exists():
+        return
+    text = path.read_text(encoding="utf-8")
+    block = _paypal_markdown(result).rstrip() + "\n"
+    if _PAYPAL_HEADING in text:
+        start = text.index(_PAYPAL_HEADING)
+        rest = text[start + len(_PAYPAL_HEADING):]
+        match = re.search(r"\n## ", rest)
+        tail = ""
+        if match:
+            tail = rest[match.start() + 1:]
+        text = text[:start].rstrip() + "\n\n" + block
+        if tail:
+            text += "\n" + tail
+    else:
+        if text and not text.endswith("\n"):
+            text += "\n"
+        text += "\n" + block
+    if not text.endswith("\n"):
+        text += "\n"
+    path.write_text(text, encoding="utf-8")
+
+
+def record_paypal(item_id: str, result: dict) -> None:
+    """Append the invoice id/status/link (or a clear skip) to the ledger and pack."""
+    if result.get("skipped"):
+        append_ledger(
+            "paypal_invoice_skipped",
+            item_id=item_id,
+            reason=result.get("reason", ""),
+            mode=result.get("mode", ""),
+        )
+    elif result.get("error") and not result.get("invoice_id"):
+        append_ledger(
+            "paypal_invoice_failed",
+            item_id=item_id,
+            error=result.get("error", ""),
+            mode=result.get("mode", ""),
+        )
+    else:
+        append_ledger(
+            "paypal_invoice_created",
+            item_id=item_id,
+            invoice_id=result.get("invoice_id"),
+            status=result.get("status"),
+            link=result.get("link"),
+            merchant_link=result.get("merchant_link"),
+            amount=result.get("amount"),
+            currency=result.get("currency", "USD"),
+            amount_source=result.get("amount_source"),
+            mode=result.get("mode"),
+        )
+    _upsert_paypal_section(item_id, result)
 
 
 def append_pack_log(item_id: str, line: str) -> None:
