@@ -2,10 +2,14 @@
 
 Uses the official Invoicing REST API (stdlib urllib only):
 
-  POST /v1/oauth2/token
+  POST /v1/oauth2/token                   (client_credentials + invoicing scope)
   POST /v2/invoicing/invoices
   POST /v2/invoicing/invoices/{id}/send   (notifications off)
   GET  /v2/invoicing/invoices/{id}
+
+The token request asks for the invoicing scope. PayPal only returns scopes
+the REST app was actually granted. If the access token's scope string does
+not include invoicing, invoice creation is not attempted.
 
 The send call only moves the draft to a payable status so a link exists.
 send_to_recipient and send_to_invoicer stay false, so PayPal is not asked
@@ -33,6 +37,13 @@ STAGE = "秋"
 
 SANDBOX_API = "https://api-m.sandbox.paypal.com"
 LIVE_API = "https://api-m.paypal.com"
+# Granted on a Sandbox REST app only after Invoicing is enabled and saved.
+# https://developer.paypal.com/apps-scopes-and-credentials
+INVOICING_SCOPE = "https://uri.paypal.com/services/invoicing"
+_INVOICING_SCOPE_FIX = (
+    "Enable Invoicing on this exact REST app in Developer Dashboard → Sandbox, "
+    "Save, re-check the token scope, or create a new Sandbox app with Invoicing checked."
+)
 
 # Used when the scored item has no parsed prize (prize_usd missing and no
 # USD-like amount in the title or summary). This is the invoice line amount
@@ -129,6 +140,11 @@ def recipient_email() -> str:
     return _present(config.env("PAYPAL_RECIPIENT_EMAIL")) or DEFAULT_RECIPIENT_EMAIL
 
 
+def invoicer_email() -> str:
+    """Sandbox Business address, or empty when PAYPAL_INVOICER_EMAIL is unset."""
+    return _present(config.env("PAYPAL_INVOICER_EMAIL"))
+
+
 def build_invoice_body(item: dict) -> dict:
     """JSON body for POST /v2/invoicing/invoices. No credentials, no payment block."""
     amount, _source = invoice_amount(item)
@@ -142,6 +158,11 @@ def build_invoice_body(item: dict) -> dict:
         "Sandbox demo invoice. This bot does not pay it.",
     )
     number = ("RMA" + item_id)[:25]
+    invoicer = {"business_name": "Rensheng Money Agent"}
+    # Optional. PayPal matches this to the business account that owns the token.
+    email = invoicer_email()
+    if email:
+        invoicer["email_address"] = email
     return {
         "detail": {
             "invoice_number": number,
@@ -153,7 +174,7 @@ def build_invoice_body(item: dict) -> dict:
             ),
             "payment_term": {"term_type": "NO_DUE_DATE"},
         },
-        "invoicer": {"business_name": "Rensheng Money Agent"},
+        "invoicer": invoicer,
         "primary_recipients": [
             {"billing_info": {"email_address": recipient_email()}}
         ],
@@ -398,6 +419,36 @@ def create_invoice_for_item(item: dict, transport=None) -> dict:
         }
 
 
+def _oauth_form() -> bytes:
+    """client_credentials plus the invoicing scope. Scope is not a substitute for a grant."""
+    return urllib.parse.urlencode(
+        {
+            "grant_type": "client_credentials",
+            "scope": INVOICING_SCOPE,
+        }
+    ).encode("utf-8")
+
+
+def _scope_text(body: dict) -> str:
+    scope = body.get("scope")
+    if isinstance(scope, str):
+        return scope
+    if isinstance(scope, (list, tuple)):
+        return " ".join(str(part) for part in scope)
+    return ""
+
+
+def _missing_invoicing_scope_message(scope_text: str) -> str:
+    shown = " ".join(scope_text.split())
+    if len(shown) > 240:
+        shown = shown[:237] + "..."
+    detail = f" Returned scope: {shown}." if shown else " Returned scope was empty."
+    return (
+        "PayPal access token is missing the invoicing scope "
+        f"({INVOICING_SCOPE}).{detail} {_INVOICING_SCOPE_FIX}"
+    )
+
+
 def _access_token(call, base: str, client_id: str, secret: str) -> str:
     url = f"{base}/v1/oauth2/token"
     _assert_allowed(url)
@@ -412,10 +463,20 @@ def _access_token(call, base: str, client_id: str, secret: str) -> str:
             "Content-Type": "application/x-www-form-urlencoded",
             "User-Agent": config.USER_AGENT,
         },
-        urllib.parse.urlencode({"grant_type": "client_credentials"}).encode("utf-8"),
+        _oauth_form(),
     )
     if status >= 400 or not isinstance(body, dict) or not body.get("access_token"):
-        raise RuntimeError(f"PayPal auth failed: {_error_text(status, body)}")
+        detail = _error_text(status, body)
+        message = f"PayPal auth failed: {detail}"
+        lowered = detail.lower()
+        if any(token in lowered for token in ("scope", "permission", "not_authorized", "insufficient")):
+            message = f"{message}. {_INVOICING_SCOPE_FIX}"
+        raise RuntimeError(message)
+    scope_text = _scope_text(body)
+    # client_credentials returns the scopes this app was granted. Requesting
+    # invoicing does not add it. Create would 403 NOT_AUTHORIZED without it.
+    if "invoicing" not in scope_text.lower():
+        raise RuntimeError(_missing_invoicing_scope_message(scope_text))
     return str(body["access_token"])
 
 
