@@ -1,0 +1,7 @@
+# money-bot has zero required third-party dependencies — Python 3.10+ stdlib only.
+#
+# OPTIONAL (only needed for semi-automated registration, money_bot/enter.py):
+#   playwright>=1.40        # then run: playwright install chromium
+#
+# enter.py degrades gracefully when playwright is missing; everything else
+# (scout/score/digest/poll/approve/verify console paths) stays stdlib-only.
