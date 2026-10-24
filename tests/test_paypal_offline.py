@@ -10,6 +10,7 @@ import os
 import sys
 import tempfile
 import unittest
+import urllib.parse
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -21,6 +22,7 @@ PAYPAL_KEYS = (
     "PAYPAL_CLIENT_SECRET",
     "PAYPAL_MODE",
     "PAYPAL_RECIPIENT_EMAIL",
+    "PAYPAL_INVOICER_EMAIL",
     "PAYPAL_PLACEHOLDER_AMOUNT",
     "MONEY_BOT_PUBLISH",
 )
@@ -75,7 +77,10 @@ class PaypalSkipAndAmountTests(_EnvGuard):
         self.assertIn("PAYPAL_CLIENT_ID=replace-me", text)
         self.assertIn("PAYPAL_CLIENT_SECRET=replace-me", text)
         self.assertIn("PAYPAL_MODE=sandbox", text)
+        self.assertIn("PAYPAL_RECIPIENT_EMAIL=", text)
+        self.assertIn("PAYPAL_INVOICER_EMAIL=", text)
         self.assertNotIn("PAYPAL_CLIENT_SECRET=A", text)
+        self.assertNotRegex(text, r"sb-[A-Za-z0-9]+@business\.example\.com")
 
     def test_missing_and_placeholder_credentials_skip_without_network(self):
         calls = []
@@ -136,9 +141,16 @@ class PaypalSkipAndAmountTests(_EnvGuard):
 
 
 class _FakePayPal:
-    def __init__(self, *, send_status: int = 200, token_status: int = 200):
+    def __init__(
+        self,
+        *,
+        send_status: int = 200,
+        token_status: int = 200,
+        scope: str | None = paypal.INVOICING_SCOPE,
+    ):
         self.send_status = send_status
         self.token_status = token_status
+        self.scope = scope
         self.calls = []
 
     def __call__(self, method, url, headers, body):
@@ -153,7 +165,10 @@ class _FakePayPal:
         if url.endswith("/v1/oauth2/token"):
             if self.token_status >= 400:
                 return self.token_status, {"error": "invalid_client", "error_description": "nope"}, {}
-            return 200, {"access_token": "test-token", "token_type": "Bearer"}, {}
+            token = {"access_token": "test-token", "token_type": "Bearer"}
+            if self.scope is not None:
+                token["scope"] = self.scope
+            return 200, token, {}
         if url.endswith("/v2/invoicing/invoices") and method == "POST":
             return 201, {
                 "id": "INV2-TEST-0001",
@@ -229,6 +244,75 @@ class PaypalCreateTests(_EnvGuard):
         self.assertFalse(send_body["send_to_invoicer"])
         self.assertTrue(transport.calls[0]["headers"]["Authorization"].startswith("Basic "))
         self.assertNotIn("sandbox-secret-value", transport.calls[0]["url"])
+        form = urllib.parse.parse_qs(transport.calls[0]["body"])
+        self.assertEqual(form.get("grant_type"), ["client_credentials"])
+        self.assertEqual(form.get("scope"), [paypal.INVOICING_SCOPE])
+        self.assertNotIn("email_address", invoice["invoicer"])
+
+    def test_missing_invoicing_scope_stops_before_create(self):
+        scopes = (
+            "https://uri.paypal.com/services/subscriptions",
+            "",
+            None,
+        )
+        for scope in scopes:
+            transport = _FakePayPal(scope=scope)
+            result = paypal.create_invoice_for_item(_item(), transport=transport)
+            self.assertNotIn("invoice_id", result, scope)
+            self.assertIn("missing the invoicing scope", result["error"])
+            self.assertIn(paypal.INVOICING_SCOPE, result["error"])
+            self.assertIn("Developer Dashboard → Sandbox", result["error"])
+            self.assertIn("new Sandbox app with Invoicing checked", result["error"])
+            self.assertNotIn("NOT_AUTHORIZED", result["error"])
+            self.assertNotIn("sandbox-secret-value", result["error"])
+            self.assertNotIn("test-token", result["error"])
+            self.assertEqual(len(transport.calls), 1)
+            self.assertTrue(transport.calls[0]["url"].endswith("/v1/oauth2/token"))
+
+    def test_readwrite_invoicing_scope_is_enough(self):
+        transport = _FakePayPal(
+            scope="https://uri.paypal.com/services/invoicing/invoices/readwrite"
+        )
+        result = paypal.create_invoice_for_item(_item(), transport=transport)
+        self.assertEqual(result["invoice_id"], "INV2-TEST-0001")
+        self.assertNotIn("error", result)
+
+    def test_invalid_scope_on_token_includes_fix_hint(self):
+        calls = []
+
+        def transport(_method, url, _headers, _body):
+            calls.append(url)
+            return 400, {
+                "error": "invalid_scope",
+                "error_description": "Invalid scope requested",
+            }, {}
+
+        result = paypal.create_invoice_for_item(_item(), transport=transport)
+        self.assertNotIn("invoice_id", result)
+        self.assertIn("invalid_scope", result["error"])
+        self.assertIn("Developer Dashboard → Sandbox", result["error"])
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(calls[0].endswith("/v1/oauth2/token"))
+
+    def test_invoicer_email_is_optional_on_the_invoice_body(self):
+        omitted = paypal.build_invoice_body(_item())
+        self.assertEqual(omitted["invoicer"], {"business_name": "Rensheng Money Agent"})
+
+        os.environ["PAYPAL_INVOICER_EMAIL"] = "  sb-merchant@business.example.com  "
+        transport = _FakePayPal()
+        result = paypal.create_invoice_for_item(_item(), transport=transport)
+        self.assertEqual(result["invoice_id"], "INV2-TEST-0001")
+        invoice = json.loads(transport.calls[1]["body"])
+        self.assertEqual(invoice["invoicer"]["business_name"], "Rensheng Money Agent")
+        self.assertEqual(
+            invoice["invoicer"]["email_address"],
+            "sb-merchant@business.example.com",
+        )
+        self.assertNotIn("sandbox-secret-value", transport.calls[1]["body"])
+
+        os.environ["PAYPAL_INVOICER_EMAIL"] = "replace-me"
+        placeholder = paypal.build_invoice_body(_item())
+        self.assertNotIn("email_address", placeholder["invoicer"])
 
     def test_live_mode_is_explicit_and_unknown_mode_stays_sandbox(self):
         os.environ["PAYPAL_MODE"] = "live"

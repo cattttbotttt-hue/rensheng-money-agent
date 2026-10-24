@@ -97,7 +97,7 @@ The invoice id, status, and link are appended to `data/ledger.jsonl` and to a `P
 ### Sandbox Client ID and Secret
 
 1. Open the [PayPal Developer Dashboard](https://developer.paypal.com/dashboard/applications/sandbox) and sign in. A personal PayPal account is enough. You do not need a live business account.
-2. Under Apps & Credentials, choose **Sandbox** and create an app (or open the default one). Copy the **Sandbox** Client ID and Secret, not the live pair.
+2. Under Apps & Credentials, choose **Sandbox** and create an app (or open the default one). Enable **Invoicing** on that exact app, Save, then copy the **Sandbox** Client ID and Secret, not the live pair. The access token must include `https://uri.paypal.com/services/invoicing`. Checking the box does not grant it until a new token's scope lists invoicing. If it still does not, create a new Sandbox app with Invoicing checked.
 3. In this repository:
 
 ```bash
@@ -115,6 +115,10 @@ PAYPAL_MODE=sandbox
 Leave the id and secret as `replace-me` to skip PayPal. `PAYPAL_MODE` defaults to `sandbox` when it is missing. The only value that leaves the sandbox is `live`, which is discouraged: it creates a real invoice and still does not pay it.
 
 Optional: `PAYPAL_RECIPIENT_EMAIL` is the buyer address stored on the invoice. When it is blank, the invoice uses `sandbox-buyer@example.com`. Point it at a Sandbox Personal account if you want that account to be the recipient. Notifications stay off either way.
+
+Optional: `PAYPAL_INVOICER_EMAIL` is the Sandbox Business address stored as `invoicer.email_address`. It must be the business account that owns the REST app. Leave it blank to omit the field.
+
+`approve` requests the invoicing scope with `client_credentials`. If the token comes back without `invoicing` in its scope string, it stops before create-invoice and prints how to enable Invoicing on this app (or create a new Sandbox app). That replaces the HTTP 403 `NOT_AUTHORIZED` response PayPal returns for a token that was never granted invoicing.
 
 `.env` is gitignored. Do not commit the secret.
 
