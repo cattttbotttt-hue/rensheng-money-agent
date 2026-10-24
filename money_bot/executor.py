@@ -1,9 +1,10 @@
 """秋 executor+ledger — daily digest, approval polling, participation packs.
 
 Approval-gated drafts only: the bot sends a digest with Approve buttons and
-prepares a participation pack when a human approves. It never auto-submits
-registrations or payments, never bypasses captchas, never performs KYC steps,
-and never requests seed phrases.
+prepares a participation pack when a human approves. After that approval it
+may create one PayPal Sandbox invoice. It never pays that invoice, never
+auto-submits registrations, never bypasses captchas, never performs KYC
+steps, and never requests seed phrases.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ from __future__ import annotations
 import html
 import json
 
-from . import config, ledger, publish, vault
+from . import config, ledger, paypal, publish, vault
 from .telegram import TelegramTrio
 from .util import log, utc_now_iso
 
@@ -122,6 +123,7 @@ def format_slim_telegram(top: list[dict], kept: int, note_relpath: str) -> str:
         tag = DATA_EFFORT_TAGS.get(item.get("data_effort", "email_only"), "")
         lines.append(f"{rank}. {item.get('score', 0):.0f}分 {tag} {prize} {item['title'][:42]}")
     lines.append(f"📓 完整摘要見 notes/ full digest: {note_relpath}")
+    lines.append("💳 Approve 只寫參與包。已設定 PayPal sandbox 時會另開一張發票，bot 不會付款。")
     return "\n".join(lines)
 
 
@@ -151,7 +153,7 @@ def digest(top_n: int = config.DIGEST_TOP_N, include_seen: bool = False) -> list
     header = (
         f"🍂 秋・每日精選 Daily digest — {utc_now_iso()[:10]}\n"
         f"{len(top)} 則新機會（評分: 低費力優先 effort-first）\n"
-        "按 ✅ Approve 產生人工參與包"
+        "按 ✅ Approve 產生人工參與包。若已設定 PayPal sandbox，批准後會開一張發票（不會付款）。"
     )
     slim = format_slim_telegram(top, scored_payload.get("count", 0), note_relpath)
     if tg.enabled:
@@ -187,9 +189,34 @@ def digest(top_n: int = config.DIGEST_TOP_N, include_seen: bool = False) -> list
     return top
 
 
+def _paypal_notice(result: dict) -> str:
+    if result.get("skipped"):
+        reason = result.get("reason") or "PayPal skipped"
+        if "PayPal skipped" in reason:
+            return f"💳 {reason}"
+        return f"💳 PayPal skipped: {reason}"
+    if result.get("error") and not result.get("invoice_id"):
+        return f"💳 PayPal invoice failed: {result.get('error')}\nBot did not pay anything."
+    return (
+        f"💳 PayPal {result.get('mode', 'sandbox')} invoice {result.get('invoice_id')} "
+        f"({result.get('status')}) {result.get('amount')} {result.get('currency', 'USD')}\n"
+        f"🔗 {result.get('link')}\n"
+        "Bot did not pay this invoice."
+    )
+
+
+def _remember_paypal(state: dict, item_id: str, result: dict) -> None:
+    approval = state["approvals"].setdefault(item_id, {})
+    approval["paypal"] = paypal.public_fields(result)
+    ledger.save_state(state)
+
+
 def approve(item_id: str, by: str = "local-cli", tg: TelegramTrio | None = None) -> dict | None:
     state = ledger.load_state()
-    if state["approvals"].get(item_id, {}).get("status") == "approved":
+    prior = state["approvals"].get(item_id) or {}
+    prior_paypal = prior.get("paypal") or {}
+    already = prior.get("status") == "approved"
+    if already and prior_paypal.get("invoice_id"):
         log(STAGE, f"{item_id} 已批准過 already approved, skip")
         return None
     item = state["items_cache"].get(item_id)
@@ -199,18 +226,40 @@ def approve(item_id: str, by: str = "local-cli", tg: TelegramTrio | None = None)
         log(STAGE, f"找不到項目 item not found: {item_id}")
         return None
 
-    state["approvals"][item_id] = {"status": "approved", "ts": utc_now_iso(), "by": by}
-    pack_path = ledger.write_pack(item, approved_by=by)
-    ledger.save_state(state)
-    ledger.append_ledger("item_approved", item_id=item_id, title=item["title"], by=by)
-    ledger.append_ledger("pack_created", item_id=item_id, path=pack_path)
-    log(STAGE, f"已產生參與包 pack → {pack_path}（人工執行 manual steps only）")
+    if not already:
+        state["approvals"][item_id] = {"status": "approved", "ts": utc_now_iso(), "by": by}
+        pack_path = ledger.write_pack(item, approved_by=by)
+        ledger.save_state(state)
+        ledger.append_ledger("item_approved", item_id=item_id, title=item["title"], by=by)
+        ledger.append_ledger("pack_created", item_id=item_id, path=pack_path)
+        log(STAGE, f"已產生參與包 pack → {pack_path}（人工執行 manual steps only）")
+    else:
+        pack_path = f"notes/packs/{item_id}.md"
+        log(STAGE, f"{item_id} 已批准，補開 PayPal 發票 retry invoice")
+
+    try:
+        paypal_result = paypal.create_invoice_for_item(item)
+    except Exception as exc:  # pragma: no cover - create_invoice_for_item already catches
+        paypal_result = {"error": f"PayPal invoice failed: {exc}", "mode": paypal.mode()}
+
+    if already and paypal_result.get("skipped"):
+        log(STAGE, f"PayPal skipped: {paypal_result.get('reason')}")
+        return None
+
+    ledger.record_paypal(item_id, paypal_result)
+    state = ledger.load_state()
+    _remember_paypal(state, item_id, paypal_result)
+    notice = _paypal_notice(paypal_result)
+    log(STAGE, notice.replace("\n", " | "))
     if tg and tg.enabled:
         tg.send(
             "autumn",
-            html.escape(f"✅ 已批准 approved: {item['title'][:80]}\n"
-                        f"📓 參與包 pack: {pack_path}\n"
-                        "請人工完成步驟；bot 不會代送任何表單或付款。"),
+            html.escape(
+                f"✅ 已批准 approved: {item['title'][:80]}\n"
+                f"📓 參與包 pack: {pack_path}\n"
+                f"{notice}\n"
+                "請人工完成步驟；bot 不會代送任何表單、不會填卡號、也不會支付這張發票。"
+            ),
         )
     publish.publish()
     return item
@@ -253,7 +302,11 @@ def poll() -> int:
             handled += 1
         else:
             continue
-    ledger.save_state(state)
+    # approve() and enter() save state themselves. Reload so this offset
+    # write does not drop the approval or the PayPal invoice just recorded.
+    fresh = ledger.load_state()
+    fresh["telegram_update_offset"] = state["telegram_update_offset"]
+    ledger.save_state(fresh)
     log(STAGE, f"poll 完成，處理 {handled} 個批准 approvals")
     publish.publish()
     return handled

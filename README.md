@@ -2,7 +2,7 @@
 
 Approval-gated scout for low-effort public money opportunities. Python 3.10+, standard library only.
 
-A judge can run the full scout → score → act pipeline with no accounts, no tokens, and no payments. When Telegram is unset, the digest prints in the terminal. Approving an item writes a manual checklist. The bot never submits a form and never sends money.
+A judge can run the full scout → score → act pipeline with no accounts, no tokens, and no payments. When Telegram is unset, the digest prints in the terminal. Approving an item writes a manual checklist. The bot never submits a form and never sends money. If PayPal sandbox credentials are present, that same approval also creates one sandbox invoice and records its id, status, and link. The bot never pays the invoice. Without those credentials, approval still writes the checklist and says PayPal was skipped.
 
 ## Pipeline
 
@@ -10,7 +10,7 @@ A judge can run the full scout → score → act pipeline with no accounts, no t
 |---|---|---|
 | Scout | `money_bot/scout.py` | Reads public, no-login feeds in `sources.json` (RSS and Devpost) into `data/raw_items.json`. |
 | Score | `money_bot/score.py` | Drops scams, spend-to-save deals, and offers closed to Macau. Labels how much personal data an item asks for. Writes `data/scored_items.json`. |
-| Act | `money_bot/executor.py` | Sends one Telegram digest with Approve buttons, or prints that digest locally. A human approval writes `notes/packs/<id>.md`. |
+| Act | `money_bot/executor.py` | Sends one Telegram digest with Approve buttons, or prints that digest locally. A human approval writes `notes/packs/<id>.md`. With PayPal sandbox credentials, it then creates one invoice and does not pay it. |
 
 Daily notes land in `notes/YYYY-MM-DD.md`. Nothing is written outside this repository.
 
@@ -44,13 +44,13 @@ The bot does not perform KYC. The label is there so a person can decide.
 
 ## Safety rules
 
-- **No auto-pay.** Approval writes a checklist. It does not pay, deposit, or check out.
+- **No auto-pay.** Approval writes a checklist and, only when PayPal sandbox credentials are set, creates one invoice. It does not pay, capture, deposit, or check out. Card, CVV, and payout calls are never made.
 - **No auto-submit.** The optional browser step can pre-fill a form and stop. The submit click waits for a separate Telegram confirm. Card, CVV, IBAN, and billing fields are skipped.
 - **No passwords.** Password inputs are never typed and never stored. “Sign in with Google” is only clicked on the opportunity’s own domain, and only after the human confirms.
 - **No seed phrases.** The bot never asks for a seed phrase, recovery phrase, or private key. Items that ask for one are dropped as scams. `PROFILE_WALLET_EVM` is a public address only.
 - **No captcha bypass.** A captcha becomes a screenshot and a request for a human.
 - **No live browser profile.** `MONEY_BOT_PROFILE_DIR` must be a copy. A system Chrome directory or a profile with `SingletonLock` is refused.
-- **Secrets stay local.** Tokens, the Gmail app password, and `PROFILE_*` values belong in `.env`, which is gitignored. Participation packs, screenshots, the ledger, and approval state are gitignored too.
+- **Secrets stay local.** Tokens, the PayPal secret, the Gmail app password, and `PROFILE_*` values belong in `.env`, which is gitignored. Participation packs, screenshots, the ledger, and approval state are gitignored too.
 
 ## Setup
 
@@ -72,6 +72,7 @@ python3 -m money_bot score          # re-score data/raw_items.json
 python3 -m money_bot digest         # send or print the digest (--all resends seen items)
 python3 -m money_bot poll           # read Telegram Approve presses
 python3 -m money_bot approve <id>   # local approval, no Telegram
+python3 -m money_bot paypal-dry-run # print the invoice body; no network
 python3 -m money_bot trio-test      # one check-in line per butler
 ```
 
@@ -81,9 +82,72 @@ python3 -m money_bot trio-test      # one check-in line per butler
 
 Recommended layout is three BotFather bots: spring (scout), summer (score), autumn (act). Put their tokens in `TELEGRAM_TOKEN_SPRING`, `TELEGRAM_TOKEN_SUMMER`, and `TELEGRAM_TOKEN_AUTUMN`. A butler with an empty token uses `TELEGRAM_BOT_TOKEN`. If every token is empty, the same report prints in the terminal.
 
-`TELEGRAM_CHAT_ID` is the numeric `chat.id` from `https://api.telegram.org/bot<token>/getUpdates` after you message the bot. The daily message is one autumn note: date, how many items were kept, three one-line highlights, the path of the markdown note, and an Approve button per top item. The next `poll` turns that press into `notes/packs/<id>.md` and does not submit anything.
+`TELEGRAM_CHAT_ID` is the numeric `chat.id` from `https://api.telegram.org/bot<token>/getUpdates` after you message the bot. The daily message is one autumn note: date, how many items were kept, three one-line highlights, the path of the markdown note, and an Approve button per top item. The next `poll` turns that press into `notes/packs/<id>.md`. It does not submit the opportunity. If PayPal is configured, the same press also creates one sandbox invoice.
 
 On your own machine, a cron can call `python3 -m money_bot run` once a day and `python3 -m money_bot poll` every 30 minutes. Set `MONEY_BOT_PUBLISH=1` only if that machine should `git pull --rebase` and push `notes/` (ignored files stay untracked). The bundled GitHub Action is manual (`workflow_dispatch`) and does not push.
+
+## PayPal Sandbox invoice
+
+Approving an item (Telegram ✅ on the autumn bot, or `python3 -m money_bot approve <id>`) can create one PayPal invoice so a demo has a real sandbox money trail. The invoice line is the opportunity title. The amount is the parsed prize (`prize_usd`, or a USD-like amount in the title or summary). When nothing was parsed, the amount is the sandbox placeholder **1.00 USD** (`PAYPAL_PLACEHOLDER_AMOUNT` overrides it). That number is not collected.
+
+This uses the official [Invoicing REST API](https://developer.paypal.com/docs/api/invoicing/v2/) with the Python standard library: `POST /v2/invoicing/invoices`, then `POST /v2/invoicing/invoices/{id}/send` with `send_to_recipient` and `send_to_invoicer` both false. The send call does not email anyone. It moves the draft to a payable status so the response includes a link. The bot never calls PayPal Orders, Payments, Capture, or Payouts, and it never records a payment. The PayPal Agent Toolkit is an LLM tool wrapper and is not used here.
+
+The invoice id, status, and link are appended to `data/ledger.jsonl` and to a `PayPal Sandbox invoice` section in `notes/packs/<id>.md`.
+
+### Sandbox Client ID and Secret
+
+1. Open the [PayPal Developer Dashboard](https://developer.paypal.com/dashboard/applications/sandbox) and sign in. A personal PayPal account is enough. You do not need a live business account.
+2. Under Apps & Credentials, choose **Sandbox** and create an app (or open the default one). Copy the **Sandbox** Client ID and Secret, not the live pair.
+3. In this repository:
+
+```bash
+cp .env.example .env
+```
+
+Set these three keys:
+
+```bash
+PAYPAL_CLIENT_ID=your-sandbox-client-id
+PAYPAL_CLIENT_SECRET=your-sandbox-secret
+PAYPAL_MODE=sandbox
+```
+
+Leave the id and secret as `replace-me` to skip PayPal. `PAYPAL_MODE` defaults to `sandbox` when it is missing. The only value that leaves the sandbox is `live`, which is discouraged: it creates a real invoice and still does not pay it.
+
+Optional: `PAYPAL_RECIPIENT_EMAIL` is the buyer address stored on the invoice. When it is blank, the invoice uses `sandbox-buyer@example.com`. Point it at a Sandbox Personal account if you want that account to be the recipient. Notifications stay off either way.
+
+`.env` is gitignored. Do not commit the secret.
+
+### Demo
+
+Offline, with or without credentials (no PayPal call):
+
+```bash
+python3 -m unittest tests.test_paypal_offline -v
+python3 -m money_bot paypal-dry-run
+```
+
+The dry run prints the invoice JSON. When the Client ID or Secret is missing, it says PayPal is skipped and that nothing was sent.
+
+With sandbox credentials in `.env`, approve the bundled example item (parsed prize 50 USD):
+
+```bash
+mkdir -p data
+python3 - << 'PY'
+import json
+from pathlib import Path
+item = json.loads(Path("data/examples/scored_item.example.json").read_text())
+Path("data/scored_items.json").write_text(
+    json.dumps({"count": 1, "items": [item]}),
+    encoding="utf-8",
+)
+PY
+python3 -m money_bot approve example000001
+```
+
+The terminal line, `notes/packs/example000001.md`, and `data/ledger.jsonl` then include the invoice id, status, and link. Open the link while logged into the sandbox business account that owns the REST app. The line item title is `Example worldwide giveaway` and the amount is `50.00 USD`.
+
+Without `PAYPAL_CLIENT_ID` and `PAYPAL_CLIENT_SECRET`, the same `approve` command still writes the participation pack and prints `PayPal skipped`. No request is sent to PayPal. Filling the credentials later and running `approve` again on that id creates the invoice once. A second successful approve does not create another one.
 
 ## Optional form fill and Gmail
 

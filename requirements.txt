@@ -5,3 +5,7 @@
 #
 # enter.py degrades gracefully when playwright is missing; everything else
 # (scout/score/digest/poll/approve/verify console paths) stays stdlib-only.
+#
+# PayPal Sandbox invoicing (money_bot/paypal.py) also stays on the stdlib.
+# It calls the official Invoicing REST API. The PayPal Agent Toolkit is not
+# required and is not installed.

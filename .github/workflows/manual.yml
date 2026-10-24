@@ -3,6 +3,8 @@ name: money-bot manual
 # Manual runs only. This workflow does not commit or push.
 # If you add Telegram credentials, store them as GitHub Actions secrets.
 # This file contains secret *names* only.
+# PayPal credentials are not injected here. Invoice creation stays on a
+# machine with a local .env, and only after a human approves an item.
 
 on:
   workflow_dispatch:
