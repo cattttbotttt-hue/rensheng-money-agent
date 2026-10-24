@@ -1,0 +1,21 @@
+{
+  "id": "example000001",
+  "title": "Example worldwide giveaway",
+  "url": "https://example.com/giveaway",
+  "source": "Example feed",
+  "source_id": "example",
+  "category": "giveaway",
+  "summary": "Open worldwide. Email only. No purchase necessary. Not a live opportunity.",
+  "published": null,
+  "extra": {},
+  "dropped": false,
+  "score": 70.0,
+  "effort": 0.8,
+  "risk": 0.0,
+  "prize_usd": 50,
+  "deadline": null,
+  "data_effort": "email_only",
+  "reasons": [
+    "example fixture"
+  ]
+}

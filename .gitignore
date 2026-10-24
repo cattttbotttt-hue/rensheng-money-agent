@@ -1,0 +1,24 @@
+# Secrets and local config. Never commit a filled env file.
+.env
+.env.*
+!.env.example
+
+# Runtime output. Packs can contain PROFILE_* values you typed locally.
+# The ledger and state can contain approval history. Screenshots stay local.
+notes/packs/
+data/enter/
+data/ledger.jsonl
+data/state.json
+data/raw_items.json
+data/scored_items.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# OS
+.DS_Store
+Thumbs.db

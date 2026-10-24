@@ -1,0 +1,50 @@
+name: money-bot manual
+
+# Manual runs only. This workflow does not commit or push.
+# If you add Telegram credentials, store them as GitHub Actions secrets.
+# This file contains secret *names* only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Run mode"
+        required: true
+        default: "digest"
+        type: choice
+        options:
+          - digest
+          - poll
+
+permissions:
+  contents: read
+
+jobs:
+  money-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run scout, score, and digest
+        if: inputs.mode == 'digest'
+        env:
+          TELEGRAM_TOKEN_SPRING: ${{ secrets.TELEGRAM_TOKEN_SPRING }}
+          TELEGRAM_TOKEN_SUMMER: ${{ secrets.TELEGRAM_TOKEN_SUMMER }}
+          TELEGRAM_TOKEN_AUTUMN: ${{ secrets.TELEGRAM_TOKEN_AUTUMN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python3 -m money_bot run
+
+      - name: Poll Telegram approvals
+        if: inputs.mode == 'poll'
+        env:
+          TELEGRAM_TOKEN_SPRING: ${{ secrets.TELEGRAM_TOKEN_SPRING }}
+          TELEGRAM_TOKEN_SUMMER: ${{ secrets.TELEGRAM_TOKEN_SUMMER }}
+          TELEGRAM_TOKEN_AUTUMN: ${{ secrets.TELEGRAM_TOKEN_AUTUMN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python3 -m money_bot poll

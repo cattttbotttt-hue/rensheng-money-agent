@@ -1,0 +1,125 @@
+{
+  "blocklist": [
+    "hinttreatyourselfsweeps"
+  ],
+  "_blocklist_notes": "Case-insensitive substrings matched against title+summary+url; matches are hard-dropped before scoring. Use for items the feed text can't expose (e.g. purchase-required promos you spot by hand).",
+  "sources": [
+    {
+      "id": "doctorofcredit",
+      "name": "Doctor of Credit",
+      "type": "rss",
+      "url": "https://www.doctorofcredit.com/feed/",
+      "category": "promo",
+      "enabled": true,
+      "notes": "Bank/broker/sign-up bonus feed (US-centric, global audience)"
+    },
+    {
+      "id": "sweepstakeslovers",
+      "name": "Sweepstakes Lovers",
+      "type": "rss",
+      "url": "https://www.sweepstakeslovers.com/feed/",
+      "category": "sweepstakes",
+      "enabled": true,
+      "notes": "Sweepstakes/giveaway directory"
+    },
+    {
+      "id": "coinairdrops",
+      "name": "CoinAirdrops",
+      "type": "rss",
+      "url": "https://coinairdrops.com/feed/",
+      "category": "crypto-airdrop",
+      "enabled": true,
+      "notes": "Crypto airdrop aggregator with per-airdrop listings; elevated base scam risk"
+    },
+    {
+      "id": "airdropalert",
+      "name": "AirdropAlert",
+      "type": "rss",
+      "url": "https://www.airdropalert.com/feed/",
+      "category": "crypto-airdrop",
+      "enabled": false,
+      "notes": "Disabled: this feed is their blog (educational articles), not airdrop listings"
+    },
+    {
+      "id": "airdropsio",
+      "name": "Airdrops.io",
+      "type": "rss",
+      "url": "https://airdrops.io/feed/",
+      "category": "crypto-airdrop",
+      "enabled": false,
+      "notes": "Disabled: this feed is their blog (educational articles), not airdrop listings"
+    },
+    {
+      "id": "reddit-sweepstakes",
+      "name": "r/sweepstakes",
+      "type": "rss",
+      "url": "https://www.reddit.com/r/sweepstakes/new/.rss",
+      "category": "sweepstakes",
+      "enabled": true,
+      "notes": "Reddit Atom feed; outbound entry link is extracted from post content"
+    },
+    {
+      "id": "reddit-giveaways",
+      "name": "r/giveaways",
+      "type": "rss",
+      "url": "https://www.reddit.com/r/giveaways/new/.rss",
+      "category": "giveaway",
+      "enabled": true,
+      "notes": "Reddit Atom feed"
+    },
+    {
+      "id": "reddit-airdrops",
+      "name": "r/airdrops",
+      "type": "rss",
+      "url": "https://www.reddit.com/r/airdrops/new/.rss",
+      "category": "crypto-airdrop",
+      "enabled": true,
+      "notes": "Reddit Atom feed; crypto airdrops, heavily scam-screened"
+    },
+    {
+      "id": "devpost",
+      "name": "Devpost hackathons",
+      "type": "devpost",
+      "url": "https://devpost.com/api/hackathons?status[]=open&status[]=upcoming&per_page=30",
+      "category": "hackathon",
+      "enabled": true,
+      "notes": "Only events tagged Beginner Friendly / Open Ended / Low-No Code (general public; professional-skill competitions skipped)"
+    },
+    {
+      "id": "reddit-signupsforpay",
+      "name": "r/signupsforpay",
+      "type": "rss",
+      "url": "https://www.reddit.com/r/signupsforpay/new/.rss",
+      "category": "signup-bonus",
+      "enabled": true,
+      "notes": "Reddit Atom: paid signup/referral offers for banks, apps, and fintech (geo-filtered for Macau)"
+    },
+    {
+      "id": "reddit-referralcodes",
+      "name": "r/referralcodes",
+      "type": "rss",
+      "url": "https://www.reddit.com/r/referralcodes/new/.rss",
+      "category": "signup-bonus",
+      "enabled": true,
+      "notes": "Reddit Atom: referral and welcome-bonus codes for apps, delivery, and exchanges"
+    },
+    {
+      "id": "reddit-crypto-referralcodes",
+      "name": "r/CryptoReferralCodes",
+      "type": "rss",
+      "url": "https://www.reddit.com/r/CryptoReferralCodes/new/.rss",
+      "category": "signup-bonus",
+      "enabled": true,
+      "notes": "Reddit Atom: crypto exchange/app referral and welcome bonuses (Coinbase, Binance, etc.)"
+    },
+    {
+      "id": "reddit-beermoney",
+      "name": "r/beermoney",
+      "type": "rss",
+      "url": "https://www.reddit.com/r/beermoney/new/.rss",
+      "category": "signup-bonus",
+      "enabled": true,
+      "notes": "Reddit Atom: app signup bonuses and low-effort referral deals (not card churning)"
+    }
+  ]
+}
