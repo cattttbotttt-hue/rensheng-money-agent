@@ -12,7 +12,7 @@ import copy
 import json
 import re
 
-from . import config
+from . import assist, config
 from .util import log, utc_now_iso
 
 STAGE = "秋"
@@ -21,6 +21,7 @@ SAFETY_BANNER = (
     "> ⚠️ **人工操作 only / manual steps only.** This pack is a draft checklist. "
     "The bot does not submit the opportunity form, pay, or enter card details. "
     "After you approve, it may create one PayPal invoice and will not pay it. "
+    "Any AI assist text is advice only and cannot approve, skip, or pay. "
     "Never share a seed phrase, recovery phrase, or private key; anyone asking "
     "is a scam. No captcha bypass, no KYC steps are performed by this bot."
 )
@@ -160,6 +161,23 @@ def _upsert_paypal_section(item_id: str, result: dict) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def record_advice(item_id: str, advice: dict) -> None:
+    """Append the advisory summary. This event does not approve or pay."""
+    public = assist.public_fields(advice)
+    append_ledger(
+        "ai_advice",
+        item_id=item_id,
+        provider=public.get("provider"),
+        model=public.get("model") or "",
+        recommendation=public.get("recommendation"),
+        summary=public.get("summary"),
+        reason=public.get("reason"),
+        skipped=bool(public.get("skipped")),
+        fallback=bool(public.get("fallback")),
+        advises_only=True,
+    )
+
+
 def record_paypal(item_id: str, result: dict) -> None:
     """Append the invoice id/status/link (or a clear skip) to the ledger and pack."""
     if result.get("skipped"):
@@ -216,7 +234,7 @@ def _profile_placeholders(profile: dict[str, str]) -> dict[str, str]:
     }
 
 
-def write_pack(item: dict, approved_by: str) -> str:
+def write_pack(item: dict, approved_by: str, advice: dict | None = None) -> str:
     config.ensure_data_dirs()
     config.VAULT_PACKS_DIR.mkdir(parents=True, exist_ok=True)
     entry_url = item.get("extra", {}).get("entry_url") or item["url"]
@@ -253,6 +271,7 @@ def write_pack(item: dict, approved_by: str) -> str:
         "## 評分理由 Scoring reasons",
         *[f"- {r}" for r in item.get("reasons", [])],
         "",
+        *assist.advice_lines(advice),
     ]
     path = config.VAULT_PACKS_DIR / f"{item['id']}.md"
     path.write_text("\n".join(lines), encoding="utf-8")
